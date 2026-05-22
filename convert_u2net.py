@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 import pnnx
 import os
 import sys
@@ -7,40 +8,45 @@ import urllib.request
 
 print("1. Downloading U2Net model...")
 
-# U2Net standard (small version ~4MB)
 MODEL_URL = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx"
 MODEL_PATH = "u2net.onnx"
 
 if not os.path.exists(MODEL_PATH):
-    print(f"   Downloading from {MODEL_URL}...")
-    urllib.request.urlretrieve(MODEL_PATH)
-    print("   Download done!")
+    print(f"   Downloading...")
+    urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
+    print(f"   Done: {os.path.getsize(MODEL_PATH)/1024/1024:.1f} MB")
 else:
-    print("   Already downloaded")
+    print(f"   Already exists: {os.path.getsize(MODEL_PATH)/1024/1024:.1f} MB")
 
-print("2. Converting ONNX to NCNN...")
+print("2. Converting ONNX → NCNN...")
 
-# pnnx can convert ONNX directly
+import onnx
+from onnx import simplifier
+
+print("   Loading ONNX...")
+model = onnx.load(MODEL_PATH)
+print(f"   Nodes: {len(model.graph.node)}")
+
+print("   Simplifying...")
+model_simp = onnx.simplify.simplify(model)
+if isinstance(model_simp, tuple):
+    model_simp = model_simp[0]
+
+SIMPLIFIED = "u2net_simple.onnx"
+onnx.save(model_simp, SIMPLIFIED)
+print(f"   Saved simplified: {os.path.getsize(SIMPLIFIED)/1024/1024:.1f} MB")
+
+print("   Converting with PNNX...")
+dummy = torch.randn(1, 3, 320, 320)
 try:
-    import onnx
-    print("   Loading ONNX model...")
-    model = onnx.load(MODEL_PATH)
-    print(f"   ONNX model loaded: {len(model.graph.node)} nodes")
-
-    # Convert via pnnx
-    pnnx.export_onnx(MODEL_PATH, "u2net")
+    pnnx.export_onnx(SIMPLIFIED, "u2net", inputs=dummy)
     print("   PNNX export done!")
 except Exception as e:
-    print(f"   ONNX convert failed: {e}")
+    print(f"   PNNX failed: {e}")
+    sys.exit(1)
 
-    # Fallback: try direct conversion
-    print("   Trying alternative method...")
-    try:
-        os.system(f"pnnx {MODEL_PATH}")
-        print("   Direct convert done!")
-    except Exception as e2:
-        print(f"   All methods failed: {e2}")
-        sys.exit(1)
+del dummy
+gc.collect()
 
 print("3. Verifying...")
 
@@ -58,15 +64,18 @@ if os.path.exists(pf) and os.path.exists(bf):
     for line in lines:
         line = line.strip()
         if line.startswith("Input"):
-            print(f"  Input: {line}")
+            parts = line.split()
+            if len(parts) >= 3:
+                print(f"  Input blob: {parts[2]}")
     for line in reversed(lines):
         line = line.strip()
         if line and not line.startswith("#") and not line.startswith("7767517"):
             parts = line.split()
             if len(parts) >= 4:
-                print(f"  Output: {line}")
+                print(f"  Output blob: {parts[-1]}")
                 break
 
+    print(f"\nTotal size: {sp + sb*1024:.0f} KB")
     print("U2Net NCNN OK!")
 else:
     print("FAILED!")
