@@ -1,4 +1,4 @@
-name: Convert U2Net to NCNN
+name: Convert U2NetP to NCNN
 
 on:
   workflow_dispatch:
@@ -21,6 +21,7 @@ jobs:
           pip install torch==2.1.0+cpu --index-url https://download.pytorch.org/whl/cpu
           pip install pnnx
           pip install onnx
+          pip install onnxsim
 
       - name: Convert to NCNN
         timeout-minutes: 15
@@ -29,8 +30,8 @@ jobs:
       - name: Upload Files
         uses: actions/upload-artifact@v4
         with:
-          name: U2Net-NCNN
+          name: U2NetP-NCNN
           path: |
-            u2net.ncnn.param
-            u2net.ncnn.bin
+            u2netp.ncnn.param
+            u2netp.ncnn.bin
           retention-days: 30
