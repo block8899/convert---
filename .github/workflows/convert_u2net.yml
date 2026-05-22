@@ -1,0 +1,36 @@
+name: Convert U2Net to NCNN
+
+on:
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install "numpy==1.26.4"
+          pip install torch==2.1.0+cpu --index-url https://download.pytorch.org/whl/cpu
+          pip install pnnx
+          pip install onnx
+
+      - name: Convert to NCNN
+        timeout-minutes: 15
+        run: python convert_u2net.py
+
+      - name: Upload Files
+        uses: actions/upload-artifact@v4
+        with:
+          name: U2Net-NCNN
+          path: |
+            u2net.ncnn.param
+            u2net.ncnn.bin
+          retention-days: 30
