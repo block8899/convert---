@@ -16,70 +16,51 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install deps
+      - name: Install Python deps
         run: |
           pip install --upgrade pip
-          pip install onnx onnxsim huggingface_hub
+          pip install onnx onnxsim huggingface_hub pnnx
 
-      - name: Build onnx2ncnn
+      - name: Verify PNNX
         run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
-          git clone https://github.com/Tencent/ncnn.git --depth 1 ncnn-tools
-          cd ncnn-tools
-          git submodule update --init
-          mkdir build && cd build
-          cmake -DNCNN_BUILD_TOOLS=ON \
-                -DNCNN_BUILD_EXAMPLES=OFF \
-                -DNCNN_BUILD_BENCHMARK=OFF \
-                -DNCNN_VULKAN=OFF \
-                -DNCNN_BUILD_TESTS=OFF \
-                -DNCNN_SYSTEM_GLSLANG=OFF \
-                -DNCNN_RUNTIME_CPU=OFF \
-                ..
-          make -j$(nproc) onnx2ncnn
-          ls -la tools/onnx/onnx2ncnn
+          which pnnx
+          pnnx --help 2>&1 | head -5 || true
 
       - name: Download ToonClip ONNX
         run: |
-          mkdir -p output
           python -c "
           from huggingface_hub import hf_hub_download
           import shutil, os
           path = hf_hub_download(repo_id='Jacopo/ToonClip', filename='model.onnx')
-          shutil.copy(path, 'toonclip.onnx')
-          print('Downloaded:', os.path.getsize('toonclip.onnx'), 'bytes')
+          shutil.copy(path, 'ToonClip.onnx')
+          print('Downloaded:', os.path.getsize('ToonClip.onnx'), 'bytes')
           "
 
-      - name: Convert ToonClip → NCNN
+      - name: Convert ToonClip
         timeout-minutes: 30
-        run: |
-          python scripts/convert_toonclip.py \
-            --onnx toonclip.onnx \
-            --output-dir output \
-            --onnx2ncnn ncnn-tools/build/tools/onnx/onnx2ncnn
+        run: python scripts/convert_toonclip.py
 
       - name: Verify
         run: |
           echo "=== Output files ==="
           ls -lh output/
           echo ""
-          echo "=== Tensor names ==="
+          echo "=== Param header ==="
           head -3 output/toonclip.param
           echo "..."
+          echo "=== Param tail ==="
           tail -2 output/toonclip.param
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: toonclip-ncnn
-          path: |
-            output/toonclip.param
-            output/toonclip.bin
+          path: output/
           retention-days: 30
 
       - name: Summary
         run: |
-          echo "## ToonClip NCNN" >> $GITHUB_STEP_SUMMARY
+          echo "## ToonClip NCNN Model" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
@@ -87,10 +68,3 @@ jobs:
             SIZE=$(du -h "$f" | cut -f1)
             echo "| \`$(basename $f)\` | $SIZE |" >> $GITHUB_STEP_SUMMARY
           done
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Tensor Names" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          head -2 output/toonclip.param >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          tail -1 output/toonclip.param >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
