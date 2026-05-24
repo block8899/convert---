@@ -19,27 +19,27 @@ jobs:
       - name: Install deps
         run: |
           pip install --upgrade pip
-          pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx huggingface_hub
+          pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx gdown
 
       - name: Verify PNNX
-        run: |
-          which pnnx
-          pnnx --help 2>&1 | head -5 || true
+        run: which pnnx
 
-      - name: Clone White-Box Cartoonization repo
+      - name: Clone repo
         run: |
           git clone https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
-          ls repo_wbc/
 
       - name: Download pretrained weights
         run: |
+          gdown "1j0jDENjdwxCDb36meP6-u5xDBzmKBOjJ" -O wbc_models.zip
+          ls -lh wbc_models.zip
           mkdir -p repo_wbc/saved_models
-          # Weights hosted on Google Drive — author's pretrained models
-          pip install gdown
-          # Check if there's a drive link in the repo
-          ls repo_wbc/saved_models/ 2>/dev/null || echo "Need to download weights"
-          # Alternative: check repo for weight files
-          find repo_wbc -name "*.pb" -o -name "*.h5" -o -name "*.ckpt*" 2>/dev/null | head -10
+          unzip -o wbc_models.zip -d repo_wbc/saved_models/ || true
+          echo "=== Extracted files ==="
+          find repo_wbc/saved_models -type f | head -30
+          echo "=== .pb files ==="
+          find repo_wbc -name "*.pb" -exec ls -lh {} \;
+          echo "=== checkpoint files ==="
+          find repo_wbc -name "*.index" -exec ls -lh {} \;
 
       - name: Convert White-Box → NCNN
         timeout-minutes: 60
