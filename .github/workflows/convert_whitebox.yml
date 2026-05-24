@@ -24,22 +24,15 @@ jobs:
       - name: Verify PNNX
         run: which pnnx
 
-      - name: Clone repo
+      - name: Clone repo + download weights
         run: |
           git clone https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
-
-      - name: Download pretrained weights
-        run: |
           gdown "1j0jDENjdwxCDb36meP6-u5xDBzmKBOjJ" -O wbc_models.zip
           ls -lh wbc_models.zip
-          mkdir -p repo_wbc/saved_models
-          unzip -o wbc_models.zip -d repo_wbc/saved_models/ || true
-          echo "=== Extracted files ==="
-          find repo_wbc/saved_models -type f | head -30
-          echo "=== .pb files ==="
-          find repo_wbc -name "*.pb" -exec ls -lh {} \;
-          echo "=== checkpoint files ==="
-          find repo_wbc -name "*.index" -exec ls -lh {} \;
+          mkdir -p repo_wbc/test_code/saved_models
+          unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
+          echo "=== Checkpoint files ==="
+          find repo_wbc/test_code/saved_models -type f -exec ls -lh {} \;
 
       - name: Convert White-Box → NCNN
         timeout-minutes: 60
