@@ -1,21 +1,19 @@
 # scripts/convert_whitebox.py
 """
-White-Box Cartoonization TensorFlow → ONNX → NCNN
+White-Box Cartoonization TF → ONNX → NCNN
 
-Pipeline:
-  1. Load TF SavedModel (saved_models/)
+Pipeline (same pattern as convert_animegan.py):
+  1. Find TF model (SavedModel / frozen .pb / checkpoint)
   2. Convert TF → ONNX via tf2onnx
   3. Simplify with onnxsim
   4. Convert ONNX → NCNN via PNNX
-  5. Verify
+  5. Fix tensor names to in0/out0
+  6. Verify
 
-White-Box has 3 sub-networks:
-  - Edge smoothing (generator_smooth)
-  - Structure (generator_structure)
-  - Texture (generator_texture)
+White-Box Cartoonization repo:
+  https://github.com/SystemErrorWang/White-box-Cartoonization
 
-The main inference uses: texture network + structure network + guided filter.
-For mobile, we convert the texture generator (main network).
+The texture generator is the main inference network.
 """
 
 import os
@@ -25,70 +23,83 @@ import shutil
 import glob
 
 
-def find_saved_model(repo_dir):
-    """Find TF SavedModel directory."""
-    # Common locations
-    candidates = [
-        os.path.join(repo_dir, "saved_models"),
-        os.path.join(repo_dir, "checkpoints"),
-        os.path.join(repo_dir, "model"),
-        os.path.join(repo_dir, "pretrained"),
-    ]
+def find_tf_model(repo_dir):
+    """Find TF model — SavedModel, frozen .pb, or checkpoint."""
+    results = {
+        'saved_model': None,
+        'frozen_pb': [],
+        'checkpoints': [],
+    }
 
-    for d in candidates:
-        if os.path.isdir(d):
-            # Check for saved_model.pb
-            for root, dirs, files in os.walk(d):
-                if "saved_model.pb" in files:
-                    return root
-                # Check for .pb files (frozen graph)
-                pb_files = [f for f in files if f.endswith(".pb")]
-                if pb_files:
-                    return root
-
-    # Search entire repo
-    for root, dirs, files in os.walk(repo_dir):
-        if "saved_model.pb" in files:
-            return root
-
-    return None
-
-
-def find_frozen_graphs(repo_dir):
-    """Find frozen .pb graph files."""
-    pb_files = []
     for root, dirs, files in os.walk(repo_dir):
         for f in files:
-            if f.endswith(".pb") and "saved_model" not in f:
-                full_path = os.path.join(root, f)
-                size_mb = os.path.getsize(full_path) / 1024 / 1024
-                if size_mb > 0.1:  # Skip tiny files
-                    pb_files.append((full_path, size_mb))
-    return pb_files
+            path = os.path.join(root, f)
+
+            if f == 'saved_model.pb':
+                results['saved_model'] = root
+
+            elif f.endswith('.pb') and 'saved_model' not in f:
+                size = os.path.getsize(path) / 1024 / 1024
+                if size > 0.1:
+                    results['frozen_pb'].append((path, size))
+
+            elif f.endswith('.index'):
+                ckpt = path.replace('.index', '')
+                results['checkpoints'].append(ckpt)
+
+    return results
 
 
-def find_checkpoint_files(repo_dir):
-    """Find TF checkpoint files."""
-    ckpt_files = []
-    for root, dirs, files in os.walk(repo_dir):
-        for f in files:
-            if f.endswith((".index", ".data-00000-of-00001")):
-                ckpt_files.append(os.path.join(root, f))
-    return ckpt_files
+def inspect_frozen_pb(pb_path):
+    """Inspect frozen .pb to find input/output tensor names."""
+    import tensorflow as tf
+
+    print(f"  Inspecting: {pb_path}")
+
+    with tf.io.gfile.GFile(pb_path, 'rb') as f:
+        graph_def = tf.compat.v1.GraphDef()
+        graph_def.ParseFromString(f.read())
+
+    # List all ops
+    inputs = []
+    outputs = []
+    all_ops = []
+
+    for node in graph_def.node:
+        all_ops.append(f"{node.op}: {node.name}")
+
+        # Find Placeholder inputs
+        if node.op == 'Placeholder':
+            dtype = node.attr.get('dtype', {})
+            shape = node.attr.get('shape', {})
+            inputs.append(node.name)
+
+    # Find last Conv2D or output nodes (common output patterns)
+    for node in graph_def.node:
+        name = node.name.lower()
+        if any(k in name for k in ['output', 'generator', 'tanh', 'sigmoid', 'final']):
+            if node.op in ('Conv2D', 'Tanh', 'Sigmoid', 'Mul', 'Add', 'BiasAdd'):
+                outputs.append(node.name)
+
+    print(f"  Ops count: {len(all_ops)}")
+    print(f"  Inputs: {inputs}")
+    print(f"  Candidate outputs: {outputs}")
+
+    # Show first 10 and last 10 ops
+    print(f"  First 10 ops:")
+    for op in all_ops[:10]:
+        print(f"    {op}")
+    print(f"  Last 10 ops:")
+    for op in all_ops[-10:]:
+        print(f"    {op}")
+
+    return inputs, outputs
 
 
-def convert_tf_savedmodel_to_onnx(saved_model_dir, output_path):
+def convert_savedmodel_to_onnx(saved_model_dir, output_path):
     """Convert TF SavedModel → ONNX."""
     print(f"  Converting SavedModel: {saved_model_dir}")
 
-    # Get input signature
-    import tensorflow as tf
-    model = tf.saved_model.load(saved_model_dir)
-    sig = model.signatures["serving_default"]
-    input_info = sig.structured_input_signature
-    print(f"  Input signature: {input_info}")
-
-    # Use tf2onnx
     cmd = [
         sys.executable, "-m", "tf2onnx.convert",
         "--saved-model", saved_model_dir,
@@ -97,17 +108,18 @@ def convert_tf_savedmodel_to_onnx(saved_model_dir, output_path):
     ]
 
     ret = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    print(f"  stdout: {ret.stdout[-500:]}")
+    print(f"  stdout: {ret.stdout[-300:]}")
     if ret.returncode != 0:
-        print(f"  stderr: {ret.stderr[-500:]}")
+        print(f"  stderr: {ret.stderr[-300:]}")
         return False
-
     return os.path.exists(output_path)
 
 
 def convert_frozen_pb_to_onnx(pb_path, output_path, input_names, output_names):
     """Convert frozen .pb → ONNX."""
-    print(f"  Converting frozen graph: {pb_path}")
+    print(f"  Converting frozen .pb: {pb_path}")
+    print(f"  Inputs: {input_names}")
+    print(f"  Outputs: {output_names}")
 
     cmd = [
         sys.executable, "-m", "tf2onnx.convert",
@@ -119,43 +131,77 @@ def convert_frozen_pb_to_onnx(pb_path, output_path, input_names, output_names):
     ]
 
     ret = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    print(f"  stdout: {ret.stdout[-500:]}")
+    print(f"  stdout: {ret.stdout[-300:]}")
     if ret.returncode != 0:
-        print(f"  stderr: {ret.stderr[-500:]}")
+        print(f"  stderr: {ret.stderr[-300:]}")
         return False
+    return os.path.exists(output_path)
 
+
+def convert_checkpoint_to_onnx(repo_dir, ckpt_path, output_path):
+    """Convert TF checkpoint → ONNX via SavedModel intermediate."""
+    print(f"  Converting checkpoint: {ckpt_path}")
+
+    # Try using the repo's own inference code to export
+    test_code_dir = os.path.join(repo_dir, "test_code")
+    network_py = os.path.join(test_code_dir, "network.py")
+
+    if os.path.exists(network_py):
+        print(f"  Found network.py at: {network_py}")
+        # Read network to understand architecture
+        with open(network_py, 'r') as f:
+            print(f"  Network code preview:")
+            for i, line in enumerate(f.readlines()[:30]):
+                print(f"    {line.rstrip()}")
+
+    # Try tf2onnx with checkpoint
+    cmd = [
+        sys.executable, "-m", "tf2onnx.convert",
+        "--checkpoint", ckpt_path + ".index",
+        "--output", output_path,
+        "--opset", "11",
+        "--inputs", "input:0",
+        "--outputs", "output:0",
+    ]
+
+    ret = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    print(f"  stdout: {ret.stdout[-300:]}")
+    if ret.returncode != 0:
+        print(f"  stderr: {ret.stderr[-300:]}")
+        return False
     return os.path.exists(output_path)
 
 
 def simplify_onnx(input_path, output_path):
-    """Simplify ONNX model."""
+    """Simplify ONNX."""
     import onnx
     from onnxsim import simplify
 
     model = onnx.load(input_path)
     input_name = model.graph.input[0].name
     output_name = model.graph.output[0].name
-    print(f"  ONNX input: '{input_name}', output: '{output_name}'")
+    input_shape = [d.dim_value for d in model.graph.input[0].type.tensor_type.shape.dim]
+    output_shape = [d.dim_value for d in model.graph.output[0].type.tensor_type.shape.dim]
+    print(f"  ONNX input: '{input_name}' shape={input_shape}")
+    print(f"  ONNX output: '{output_name}' shape={output_shape}")
 
     model_simp, check = simplify(model)
     if check:
         onnx.save(model_simp, output_path)
-        print(f"  Simplified OK: {os.path.getsize(output_path) / 1024 / 1024:.1f} MB")
-        return True, input_name, output_name
+        print(f"  Simplified OK")
     else:
         print("  Simplify failed, using original")
         shutil.copy(input_path, output_path)
-        return False, input_name, output_name
+
+    return input_name, output_name
 
 
 def convert_onnx_to_ncnn(onnx_path, param_path, bin_path):
     """Convert ONNX → NCNN via PNNX."""
-    print(f"  Converting via PNNX: {onnx_path}")
-
-    # Clean previous PNNX output
     base = os.path.splitext(onnx_path)[0]
     pnnx_param = base + ".ncnn.param"
     pnnx_bin = base + ".ncnn.bin"
+
     for f in [pnnx_param, pnnx_bin]:
         if os.path.exists(f):
             os.remove(f)
@@ -212,7 +258,7 @@ def verify_model(param_path, bin_path):
 
 
 def main():
-    print("=== White-Box Cartoonization → NCNN ===\n")
+    print("=== White-Box Cartoonization TF → NCNN ===\n")
 
     repo_dir = "repo_wbc"
     output_dir = "output"
@@ -222,103 +268,92 @@ def main():
         print(f"MISSING: {repo_dir}/")
         sys.exit(1)
 
-    # 1. Analyze repo structure
-    print("1. Analyzing repo structure...")
+    # 1. Find TF model
+    print("1. Finding TF model...")
+    models = find_tf_model(repo_dir)
+    print(f"   SavedModel: {models['saved_model']}")
+    print(f"   Frozen .pb: {[(f, f'{s:.1f}MB') for f, s in models['frozen_pb']]}")
+    print(f"   Checkpoints: {models['checkpoints']}")
 
-    saved_model_dir = find_saved_model(repo_dir)
-    frozen_graphs = find_frozen_graphs(repo_dir)
-    checkpoint_files = find_checkpoint_files(repo_dir)
-
-    print(f"   SavedModel dir: {saved_model_dir}")
-    print(f"   Frozen graphs: {[(f, f'{s:.1f}MB') for f, s in frozen_graphs]}")
-    print(f"   Checkpoint files: {checkpoint_files}")
-
-    # List all .pb files
-    print("\n   All .pb files:")
-    for root, dirs, files in os.walk(repo_dir):
-        for f in files:
-            if f.endswith(".pb"):
-                path = os.path.join(root, f)
-                size = os.path.getsize(path) / 1024 / 1024
-                print(f"     {path} ({size:.1f} MB)")
-
-    # List all .h5 files
-    print("\n   All .h5 files:")
-    for root, dirs, files in os.walk(repo_dir):
-        for f in files:
-            if f.endswith(".h5"):
-                path = os.path.join(root, f)
-                size = os.path.getsize(path) / 1024 / 1024
-                print(f"     {path} ({size:.1f} MB)")
-
-    # 2. Try conversion based on what we found
-    print("\n2. Converting model...")
-
+    # 2. Convert TF → ONNX
+    print("\n2. Converting TF → ONNX...")
+    raw_onnx = os.path.join(output_dir, "whitebox_raw.onnx")
     onnx_path = os.path.join(output_dir, "whitebox_sim.onnx")
     param_path = os.path.join(output_dir, "whitebox.param")
     bin_path = os.path.join(output_dir, "whitebox.bin")
 
     converted = False
 
-    # Strategy 1: SavedModel → ONNX
-    if saved_model_dir and not converted:
-        print(f"\n   Strategy 1: SavedModel → ONNX")
-        raw_onnx = os.path.join(output_dir, "whitebox_raw.onnx")
-        if convert_tf_savedmodel_to_onnx(saved_model_dir, raw_onnx):
-            ok, inp, outp = simplify_onnx(raw_onnx, onnx_path)
+    # Strategy 1: SavedModel
+    if models['saved_model'] and not converted:
+        print("\n   Strategy 1: SavedModel → ONNX")
+        if convert_savedmodel_to_onnx(models['saved_model'], raw_onnx):
             converted = True
 
-    # Strategy 2: Frozen .pb → ONNX
-    if frozen_graphs and not converted:
-        print(f"\n   Strategy 2: Frozen .pb → ONNX")
-        # Use largest .pb file (likely the main model)
-        frozen_graphs.sort(key=lambda x: x[1], reverse=True)
-        pb_path, pb_size = frozen_graphs[0]
+    # Strategy 2: Frozen .pb
+    if models['frozen_pb'] and not converted:
+        print("\n   Strategy 2: Frozen .pb → ONNX")
+        models['frozen_pb'].sort(key=lambda x: x[1], reverse=True)
+        pb_path, pb_size = models['frozen_pb'][0]
         print(f"   Using: {pb_path} ({pb_size:.1f} MB)")
 
-        # Need to determine input/output names
-        # Try common names
-        input_names = "Placeholder:0"
-        output_names = "generator/output:0"
+        inputs, outputs = inspect_frozen_pb(pb_path)
 
-        raw_onnx = os.path.join(output_dir, "whitebox_raw.onnx")
-        if convert_frozen_pb_to_onnx(pb_path, raw_onnx, input_names, output_names):
-            ok, inp, outp = simplify_onnx(raw_onnx, onnx_path)
+        if inputs and outputs:
+            input_names = inputs[0] + ":0"
+            output_names = outputs[-1] + ":0"
+            if convert_frozen_pb_to_onnx(pb_path, raw_onnx, input_names, output_names):
+                converted = True
+        else:
+            print("   Could not determine input/output names!")
+            # Try common names
+            for inp in ["input:0", "Placeholder:0", "input_image:0"]:
+                for out in ["output:0", "generator/output:0", "generator/G_conv9/BiasAdd:0"]:
+                    print(f"   Trying: {inp} → {out}")
+                    if convert_frozen_pb_to_onnx(pb_path, raw_onnx, inp, out):
+                        converted = True
+                        break
+                if converted:
+                    break
+
+    # Strategy 3: Checkpoint
+    if models['checkpoints'] and not converted:
+        print("\n   Strategy 3: Checkpoint → ONNX")
+        ckpt = models['checkpoints'][0]
+        print(f"   Using: {ckpt}")
+        if convert_checkpoint_to_onnx(repo_dir, ckpt, raw_onnx):
             converted = True
 
     if not converted:
-        print("\n   FAILED: Could not find convertible model!")
-        print("   The repo may need weights downloaded from Google Drive.")
-        print("   Check README for download instructions.")
-        print("\n   Repo contents:")
+        print("\n   FAILED: Could not convert any TF model!")
+        print("   Dumping repo structure for debug:")
         for root, dirs, files in os.walk(repo_dir):
-            level = root.replace(repo_dir, "").count(os.sep)
-            indent = " " * 2 * level
+            level = root.replace(repo_dir, '').count(os.sep)
+            if level > 3:
+                continue
+            indent = '  ' * level
             print(f"   {indent}{os.path.basename(root)}/")
-            if level < 2:
-                subindent = " " * 2 * (level + 1)
-                for f in files[:10]:
-                    fsize = os.path.getsize(os.path.join(root, f))
-                    print(f"   {subindent}{f} ({fsize/1024:.0f} KB)")
+            subindent = '  ' * (level + 1)
+            for f in sorted(files)[:15]:
+                fsize = os.path.getsize(os.path.join(root, f))
+                print(f"   {subindent}{f} ({fsize/1024:.0f} KB)")
         sys.exit(1)
 
-    # 3. ONNX → NCNN via PNNX
-    print("\n3. Converting ONNX → NCNN...")
+    # 3. Simplify ONNX
+    print("\n3. Simplifying ONNX...")
+    input_name, output_name = simplify_onnx(raw_onnx, onnx_path)
 
-    import onnx
-    model = onnx.load(onnx_path)
-    inp = model.graph.input[0].name
-    outp = model.graph.output[0].name
-
+    # 4. ONNX → NCNN via PNNX
+    print("\n4. Converting ONNX → NCNN...")
     if not convert_onnx_to_ncnn(onnx_path, param_path, bin_path):
         print("   PNNX conversion failed!")
         sys.exit(1)
 
-    # 4. Fix tensor names
-    print("\n4. Fixing tensor names...")
-    fix_tensor_names(param_path, inp, outp)
+    # 5. Fix tensor names
+    print("\n5. Fixing tensor names...")
+    fix_tensor_names(param_path, input_name, output_name)
 
-    # 5. Verify
+    # 6. Verify
     print("\n=== Output ===")
     verify_model(param_path, bin_path)
     print("\nWhite-Box Cartoonization DONE!")
