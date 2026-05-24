@@ -1,0 +1,135 @@
+# .github/workflows/convert-toonclip.yml
+
+name: Convert ToonClip ONNX → NCNN
+
+on:
+  workflow_dispatch:  # Chạy manual
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1. Setup Python + install onnx2ncnn
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install onnx + onnx2ncnn
+        run: |
+          pip install onnx onnxsim
+          # Build ncnn tools from source
+          git clone https://github.com/Tencent/ncnn.git --depth 1 ncnn-tools
+          cd ncnn-tools
+          mkdir build && cd build
+          cmake -DNCNN_BUILD_TOOLS=ON -DNCNN_BUILD_EXAMPLES=OFF -DNCNN_BUILD_BENCHMARK=OFF \
+                -DNCNN_VULKAN=OFF -DNCNN_BUILD_TESTS=OFF ..
+          make -j$(nproc) onnx2ncnn
+
+      # 2. Download ONNX from HuggingFace
+      - name: Download ToonClip ONNX
+        run: |
+          mkdir -p models/toonclip
+          # HuggingFace ONNX model
+          pip install huggingface_hub
+          python -c "
+          from huggingface_hub import hf_hub_download
+          path = hf_hub_download(repo_id='Jacopo/ToonClip', filename='model.onnx')
+          import shutil, os
+          shutil.copy(path, 'models/toonclip/toonclip.onnx')
+          print('Downloaded:', os.path.getsize('models/toonclip/toonclip.onnx'), 'bytes')
+          "
+
+      # 3. Simplify ONNX (optional nhưng recommended)
+      - name: Simplify ONNX
+        run: |
+          python -c "
+          import onnx
+          from onnxsim import simplify
+
+          model = onnx.load('models/toonclip/toonclip.onnx')
+          print('Input:', [i.name for i in model.graph.input])
+          print('Output:', [o.name for o in model.graph.output])
+
+          model_simp, check = simplify(model)
+          if check:
+              onnx.save(model_simp, 'models/toonclip/toonclip_sim.onnx')
+              print('Simplified OK')
+          else:
+              print('Simplify failed, using original')
+              import shutil
+              shutil.copy('models/toonclip/toonclip.onnx', 'models/toonclip/toonclip_sim.onnx')
+          "
+
+      # 4. Convert ONNX → NCNN
+      - name: Convert to NCNN
+        run: |
+          ./ncnn-tools/build/tools/onnx2ncnn \
+            models/toonclip/toonclip_sim.onnx \
+            models/toonclip/toonclip.param \
+            models/toonclip/toonclip.bin
+
+          echo "=== Output files ==="
+          ls -lh models/toonclip/
+
+          echo "=== Tensor names (first 5 + last 5 lines) ==="
+          head -5 models/toonclip/toonclip.param
+          echo "..."
+          tail -5 models/toonclip/toonclip.param
+
+      # 5. Verify NCNN model
+      - name: Verify model
+        run: |
+          # Check files exist and not empty
+          if [ ! -s models/toonclip/toonclip.param ]; then
+            echo "ERROR: .param file is empty!"
+            exit 1
+          fi
+          if [ ! -s models/toonclip/toonclip.bin ]; then
+            echo "ERROR: .bin file is empty!"
+            exit 1
+          fi
+
+          # Count layers
+          LAYERS=$(grep -c "^[A-Z]" models/toonclip/toonclip.param || true)
+          echo "Layer count: $LAYERS"
+
+          # Show param summary
+          echo "=== Param header ==="
+          head -2 models/toonclip/toonclip.param
+          echo "=== Input blob ==="
+          grep "Input" models/toonclip/toonclip.param | head -1
+          echo "=== Last layer ==="
+          tail -1 models/toonclip/toonclip.param
+
+      # 6. Upload artifacts
+      - name: Upload NCNN model
+        uses: actions/upload-artifact@v4
+        with:
+          name: toonclip-ncnn
+          path: |
+            models/toonclip/toonclip.param
+            models/toonclip/toonclip.bin
+          retention-days: 30
+
+      # 7. Summary
+      - name: Summary
+        run: |
+          echo "## ToonClip NCNN Model" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          for f in models/toonclip/toonclip.{param,bin}; do
+            SIZE=$(du -h "$f" | cut -f1)
+            echo "| \`$(basename $f)\` | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Tensor Names" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          head -2 models/toonclip/toonclip.param >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          tail -1 models/toonclip/toonclip.param >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
