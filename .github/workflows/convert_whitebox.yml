@@ -1,0 +1,77 @@
+# .github/workflows/convert_whitebox.yml
+name: Convert White-Box Cartoonization to NCNN
+
+on:
+  workflow_dispatch:
+
+jobs:
+  convert:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx huggingface_hub
+
+      - name: Verify PNNX
+        run: |
+          which pnnx
+          pnnx --help 2>&1 | head -5 || true
+
+      - name: Clone White-Box Cartoonization repo
+        run: |
+          git clone https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
+          ls repo_wbc/
+
+      - name: Download pretrained weights
+        run: |
+          mkdir -p repo_wbc/saved_models
+          # Weights hosted on Google Drive — author's pretrained models
+          pip install gdown
+          # Check if there's a drive link in the repo
+          ls repo_wbc/saved_models/ 2>/dev/null || echo "Need to download weights"
+          # Alternative: check repo for weight files
+          find repo_wbc -name "*.pb" -o -name "*.h5" -o -name "*.ckpt*" 2>/dev/null | head -10
+
+      - name: Convert White-Box → NCNN
+        timeout-minutes: 60
+        run: python scripts/convert_whitebox.py
+
+      - name: Verify
+        run: |
+          echo "=== Output files ==="
+          ls -lh output/
+          echo ""
+          for f in output/*.param; do
+            echo "=== $(basename $f) ==="
+            head -3 "$f"
+            echo "..."
+            tail -2 "$f"
+            echo ""
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: whitebox-ncnn
+          path: output/
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "## White-Box Cartoonization NCNN" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          for f in output/*; do
+            SIZE=$(du -h "$f" | cut -f1)
+            echo "| \`$(basename $f)\` | $SIZE |" >> $GITHUB_STEP_SUMMARY
+          done
