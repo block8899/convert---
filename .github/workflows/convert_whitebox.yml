@@ -20,6 +20,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx gdown
+          pip install tf-slim
 
       - name: Verify PNNX
         run: which pnnx
