@@ -1,6 +1,6 @@
 # scripts/convert_whitebox.py
 """
-White-Box Cartoonization TF1 → Frozen PB → ONNX → NCNN
+White-Box Cartoonization TF1 -> Frozen PB -> ONNX -> NCNN
 """
 
 import os
@@ -10,7 +10,7 @@ import shutil
 
 
 def main():
-    print("=== White-Box Cartoonization TF1 → NCNN ===\n")
+    print("=== White-Box Cartoonization TF1 -> NCNN ===\n")
 
     repo_dir = "repo_wbc"
     test_code_dir = os.path.join(repo_dir, "test_code")
@@ -23,66 +23,70 @@ def main():
         sys.exit(1)
 
     print(f"Checkpoint: {ckpt_path}")
-    print(f"Data size: {os.path.getsize(ckpt_path + '.data-00000-of-00001') / 1024 / 1024:.1f} MB")
+    data_file = ckpt_path + ".data-00000-of-00001"
+    print(f"Data size: {os.path.getsize(data_file) / 1024 / 1024:.1f} MB")
 
-    # 1. Write export script to file (avoids indentation issues)
+    # ─────────────────────────────────────────
+    # 1. Load TF1 checkpoint -> frozen .pb
+    # ─────────────────────────────────────────
     print("\n1. Loading TF1 model and exporting frozen .pb...")
 
-    export_py = os.path.join(output_dir, "_export_frozen.py")
     frozen_pb = os.path.join(output_dir, "whitebox_frozen.pb")
+    export_py = os.path.join(output_dir, "_export_frozen.py")
+
+    lines = []
+    lines.append("import os")
+    lines.append("import sys")
+    lines.append("import tensorflow as tf")
+    lines.append("")
+    lines.append("tf1 = tf.compat.v1")
+    lines.append("tf1.disable_eager_execution()")
+    lines.append("")
+    lines.append("import tf_slim as slim")
+    lines.append("contrib_mock = type(sys)('tensorflow.contrib')")
+    lines.append("contrib_mock.slim = slim")
+    lines.append("sys.modules['tensorflow.contrib'] = contrib_mock")
+    lines.append("sys.modules['tensorflow.contrib.slim'] = slim")
+    lines.append("")
+    lines.append(f"test_code_dir = r'{test_code_dir}'")
+    lines.append("sys.path.insert(0, test_code_dir)")
+    lines.append("")
+    lines.append("import network")
+    lines.append("unet_generator = network.unet_generator")
+    lines.append("")
+    lines.append("print('Building graph...')")
+    lines.append("input_ph = tf1.placeholder(tf.float32, [1, 512, 512, 3], name='input')")
+    lines.append("output = unet_generator(input_ph, channel=32, num_blocks=4, name='generator', reuse=False)")
+    lines.append("output = tf.identity(output, name='output')")
+    lines.append("print(f'Output shape: {output.shape}')")
+    lines.append("")
+    lines.append(f"ckpt_path = r'{ckpt_path}'")
+    lines.append("print(f'Loading checkpoint: {ckpt_path}')")
+    lines.append("saver = tf1.train.Saver()")
+    lines.append("sess = tf1.Session()")
+    lines.append("saver.restore(sess, ckpt_path)")
+    lines.append("print('Checkpoint loaded OK')")
+    lines.append("")
+    lines.append("print('Freezing graph...')")
+    lines.append("graph_def = tf1.graph_util.convert_variables_to_constants(")
+    lines.append("    sess, sess.graph_def, ['output'])")
+    lines.append("")
+    lines.append(f"frozen_path = r'{frozen_pb}'")
+    lines.append("with tf.io.gfile.GFile(frozen_path, 'wb') as fout:")
+    lines.append("    fout.write(graph_def.SerializeToString())")
+    lines.append("print(f'Frozen .pb: {os.path.getsize(frozen_path)/1024/1024:.1f} MB')")
+    lines.append("")
+    lines.append("for node in graph_def.node:")
+    lines.append("    if node.op == 'Placeholder':")
+    lines.append("        print(f'Input: {node.name}')")
+    lines.append("    if 'output' in node.name.lower():")
+    lines.append("        print(f'Output: {node.name} op={node.op}')")
+    lines.append("")
+    lines.append("sess.close()")
+    lines.append("print('Export DONE')")
 
     with open(export_py, "w") as f:
-        f.write("import os\n")
-        f.write("import sys\n")
-        f.write("import tensorflow as tf\n")
-        f.write("import importlib.util\n")
-        f.write("\n")
-        f.write("tf1 = tf.compat.v1\n")
-        f.write("tf1.disable_eager_execution()\n")
-        f.write("\n")
-        f.write("import tf_slim as slim\n")
-        f.write("tf.contrib = type(sys)('contrib')\n")
-        f.write("tf.contrib.slim = slim\n")
-        f.write("\n")
-        f.write(f"test_code_dir = r'{test_code_dir}'\n")
-        f.write("sys.path.insert(0, test_code_dir)\n")
-        f.write("\n")
-        f.write("spec = importlib.util.spec_from_file_location(\n")
-        f.write("    'network', os.path.join(test_code_dir, 'network.py'))\n")
-        f.write("network_mod = importlib.util.module_from_spec(spec)\n")
-        f.write("spec.loader.exec_module(network_mod)\n")
-        f.write("unet_generator = network_mod.unet_generator\n")
-        f.write("\n")
-        f.write("print('Building graph...')\n")
-        f.write("input_ph = tf1.placeholder(tf.float32, [1, 512, 512, 3], name='input')\n")
-        f.write("output = unet_generator(input_ph, channel=32, num_blocks=4, name='generator', reuse=False)\n")
-        f.write("output = tf.identity(output, name='output')\n")
-        f.write("print(f'Output shape: {output.shape}')\n")
-        f.write("\n")
-        f.write(f"ckpt_path = r'{ckpt_path}'\n")
-        f.write("print(f'Loading checkpoint: {ckpt_path}')\n")
-        f.write("saver = tf1.train.Saver()\n")
-        f.write("sess = tf1.Session()\n")
-        f.write("saver.restore(sess, ckpt_path)\n")
-        f.write("print('Checkpoint loaded OK')\n")
-        f.write("\n")
-        f.write("print('Freezing graph...')\n")
-        f.write("graph_def = tf1.graph_util.convert_variables_to_constants(\n")
-        f.write("    sess, sess.graph_def, ['output'])\n")
-        f.write("\n")
-        f.write(f"frozen_path = r'{frozen_pb}'\n")
-        f.write("with tf.io.gfile.GFile(frozen_path, 'wb') as fout:\n")
-        f.write("    fout.write(graph_def.SerializeToString())\n")
-        f.write("print(f'Frozen .pb: {os.path.getsize(frozen_path)/1024/1024:.1f} MB')\n")
-        f.write("\n")
-        f.write("for node in graph_def.node:\n")
-        f.write("    if node.op == 'Placeholder':\n")
-        f.write("        print(f'Input: {node.name}')\n")
-        f.write("    if 'output' in node.name.lower():\n")
-        f.write("        print(f'Output: {node.name} op={node.op}')\n")
-        f.write("\n")
-        f.write("sess.close()\n")
-        f.write("print('Export DONE')\n")
+        f.write("\n".join(lines) + "\n")
 
     ret = subprocess.run(
         [sys.executable, export_py],
@@ -99,8 +103,10 @@ def main():
 
     print(f"Frozen .pb: {os.path.getsize(frozen_pb) / 1024 / 1024:.1f} MB")
 
-    # 2. Convert frozen .pb → ONNX
-    print("\n2. Converting frozen .pb → ONNX...")
+    # ─────────────────────────────────────────
+    # 2. Frozen .pb -> ONNX
+    # ─────────────────────────────────────────
+    print("\n2. Converting frozen .pb -> ONNX...")
 
     raw_onnx = os.path.join(output_dir, "whitebox_raw.onnx")
 
@@ -117,7 +123,6 @@ def main():
     print(f"stdout:\n{ret.stdout[-500:]}")
     if ret.returncode != 0:
         print(f"stderr:\n{ret.stderr[-500:]}")
-        # Try alternative output names
         alt_names = [
             "generator/output:0",
             "generator/G_conv9/BiasAdd:0",
@@ -139,7 +144,9 @@ def main():
 
     print(f"Raw ONNX: {os.path.getsize(raw_onnx) / 1024 / 1024:.1f} MB")
 
+    # ─────────────────────────────────────────
     # 3. Simplify ONNX
+    # ─────────────────────────────────────────
     print("\n3. Simplifying ONNX...")
 
     import onnx
@@ -160,8 +167,10 @@ def main():
         print("  Simplify failed, using original")
         shutil.copy(raw_onnx, sim_path)
 
-    # 4. Convert ONNX → NCNN via PNNX
-    print("\n4. Converting ONNX → NCNN via PNNX...")
+    # ─────────────────────────────────────────
+    # 4. ONNX -> NCNN via PNNX
+    # ─────────────────────────────────────────
+    print("\n4. Converting ONNX -> NCNN via PNNX...")
 
     pnnx_param = sim_path.replace(".onnx", ".ncnn.param")
     pnnx_bin = sim_path.replace(".onnx", ".ncnn.bin")
@@ -190,7 +199,9 @@ def main():
     print(f"  param: {os.path.getsize(param_path) / 1024:.1f} KB")
     print(f"  bin:   {os.path.getsize(bin_path) / 1024 / 1024:.1f} MB")
 
+    # ─────────────────────────────────────────
     # 5. Fix tensor names
+    # ─────────────────────────────────────────
     print("\n5. Fixing tensor names...")
 
     with open(param_path, "r") as f:
@@ -206,7 +217,9 @@ def main():
     with open(param_path, "w") as f:
         f.write(content)
 
+    # ─────────────────────────────────────────
     # 6. Verify
+    # ─────────────────────────────────────────
     print("\n=== Output ===")
     print(f"  whitebox.param: {os.path.getsize(param_path) / 1024:.1f} KB")
     print(f"  whitebox.bin:   {os.path.getsize(bin_path) / 1024 / 1024:.1f} MB")
