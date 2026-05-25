@@ -42,14 +42,12 @@ def main():
     lines.append("tf1 = tf.compat.v1")
     lines.append("tf1.disable_eager_execution()")
     lines.append("")
-    # Patch tf.contrib.slim
     lines.append("import tf_slim as slim")
     lines.append("contrib_mock = type(sys)('tensorflow.contrib')")
     lines.append("contrib_mock.slim = slim")
     lines.append("sys.modules['tensorflow.contrib'] = contrib_mock")
     lines.append("sys.modules['tensorflow.contrib.slim'] = slim")
     lines.append("")
-    # Patch TF1 APIs into tf module
     lines.append("tf.variable_scope = tf1.variable_scope")
     lines.append("tf.get_variable = tf1.get_variable")
     lines.append("tf.placeholder = tf1.placeholder")
