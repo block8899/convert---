@@ -26,74 +26,78 @@ def main():
     data_file = ckpt_path + ".data-00000-of-00001"
     print(f"Data size: {os.path.getsize(data_file) / 1024 / 1024:.1f} MB")
 
-    # ─────────────────────────────────────────
     # 1. Load TF1 checkpoint -> frozen .pb
-    # ─────────────────────────────────────────
     print("\n1. Loading TF1 model and exporting frozen .pb...")
 
     frozen_pb = os.path.join(output_dir, "whitebox_frozen.pb")
     export_py = os.path.join(output_dir, "_export_frozen.py")
 
-    lines = []
-    lines.append("import os")
-    lines.append("import sys")
-    lines.append("import tensorflow as tf")
-    lines.append("")
-    lines.append("tf1 = tf.compat.v1")
-    lines.append("tf1.disable_eager_execution()")
-    lines.append("")
-    lines.append("import tf_slim as slim")
-    lines.append("contrib_mock = type(sys)('tensorflow.contrib')")
-    lines.append("contrib_mock.slim = slim")
-    lines.append("sys.modules['tensorflow.contrib'] = contrib_mock")
-    lines.append("sys.modules['tensorflow.contrib.slim'] = slim")
-    lines.append("")
-    lines.append("tf.variable_scope = tf1.variable_scope")
-    lines.append("tf.get_variable = tf1.get_variable")
-    lines.append("tf.placeholder = tf1.placeholder")
-    lines.append("tf.Session = tf1.Session")
-    lines.append("tf.train.Saver = tf1.train.Saver")
-    lines.append("tf.GraphDef = tf1.GraphDef")
-    lines.append("")
-    lines.append(f"test_code_dir = r'{test_code_dir}'")
-    lines.append("sys.path.insert(0, test_code_dir)")
-    lines.append("")
-    lines.append("import network")
-    lines.append("unet_generator = network.unet_generator")
-    lines.append("")
-    lines.append("print('Building graph...')")
-    lines.append("input_ph = tf1.placeholder(tf.float32, [1, 512, 512, 3], name='input')")
-    lines.append("output = unet_generator(input_ph, channel=32, num_blocks=4, name='generator', reuse=False)")
-    lines.append("output = tf.identity(output, name='output')")
-    lines.append("print(f'Output shape: {output.shape}')")
-    lines.append("")
-    lines.append(f"ckpt_path = r'{ckpt_path}'")
-    lines.append("print(f'Loading checkpoint: {ckpt_path}')")
-    lines.append("saver = tf1.train.Saver()")
-    lines.append("sess = tf1.Session()")
-    lines.append("saver.restore(sess, ckpt_path)")
-    lines.append("print('Checkpoint loaded OK')")
-    lines.append("")
-    lines.append("print('Freezing graph...')")
-    lines.append("graph_def = tf1.graph_util.convert_variables_to_constants(")
-    lines.append("    sess, sess.graph_def, ['output'])")
-    lines.append("")
-    lines.append(f"frozen_path = r'{frozen_pb}'")
-    lines.append("with tf.io.gfile.GFile(frozen_path, 'wb') as fout:")
-    lines.append("    fout.write(graph_def.SerializeToString())")
-    lines.append("print(f'Frozen .pb: {os.path.getsize(frozen_path)/1024/1024:.1f} MB')")
-    lines.append("")
-    lines.append("for node in graph_def.node:")
-    lines.append("    if node.op == 'Placeholder':")
-    lines.append("        print(f'Input: {node.name}')")
-    lines.append("    if 'output' in node.name.lower():")
-    lines.append("        print(f'Output: {node.name} op={node.op}')")
-    lines.append("")
-    lines.append("sess.close()")
-    lines.append("print('Export DONE')")
+    export_lines = [
+        "import os",
+        "import sys",
+        "import tensorflow as tf",
+        "",
+        "# Force TF1 behavior",
+        "tf1 = tf.compat.v1",
+        "tf1.disable_eager_execution()",
+        "",
+        "# Replace tensorflow.contrib.slim with standalone tf_slim",
+        "import tf_slim as slim",
+        "contrib_mock = type(sys)('tensorflow.contrib')",
+        "contrib_mock.slim = slim",
+        "sys.modules['tensorflow.contrib'] = contrib_mock",
+        "sys.modules['tensorflow.contrib.slim'] = slim",
+        "",
+        "# Re-export TF1 APIs into tf module so network.py can use tf.xxx",
+        "tf.variable_scope = tf1.variable_scope",
+        "tf.get_variable = tf1.get_variable",
+        "tf.placeholder = tf1.placeholder",
+        "tf.Session = tf1.Session",
+        "tf.train.Saver = tf1.train.Saver",
+        "tf.GraphDef = tf1.GraphDef",
+        "tf.image.resize_bilinear = tf.compat.v1.image.resize_bilinear",
+        "tf.image.resize_nearest_neighbor = tf.compat.v1.image.resize_nearest_neighbor",
+        "",
+        f"test_code_dir = r'{test_code_dir}'",
+        "sys.path.insert(0, test_code_dir)",
+        "",
+        "import network",
+        "unet_generator = network.unet_generator",
+        "",
+        "print('Building graph...')",
+        "input_ph = tf1.placeholder(tf.float32, [1, 512, 512, 3], name='input')",
+        "output = unet_generator(input_ph, channel=32, num_blocks=4, name='generator', reuse=False)",
+        "output = tf.identity(output, name='output')",
+        "print(f'Output shape: {output.shape}')",
+        "",
+        f"ckpt_path = r'{ckpt_path}'",
+        "print(f'Loading checkpoint: {ckpt_path}')",
+        "saver = tf1.train.Saver()",
+        "sess = tf1.Session()",
+        "saver.restore(sess, ckpt_path)",
+        "print('Checkpoint loaded OK')",
+        "",
+        "print('Freezing graph...')",
+        "graph_def = tf1.graph_util.convert_variables_to_constants(",
+        "    sess, sess.graph_def, ['output'])",
+        "",
+        f"frozen_path = r'{frozen_pb}'",
+        "with tf.io.gfile.GFile(frozen_path, 'wb') as fout:",
+        "    fout.write(graph_def.SerializeToString())",
+        "print(f'Frozen .pb: {os.path.getsize(frozen_path)/1024/1024:.1f} MB')",
+        "",
+        "for node in graph_def.node:",
+        "    if node.op == 'Placeholder':",
+        "        print(f'Input: {node.name}')",
+        "    if 'output' in node.name.lower():",
+        "        print(f'Output: {node.name} op={node.op}')",
+        "",
+        "sess.close()",
+        "print('Export DONE')",
+    ]
 
     with open(export_py, "w") as f:
-        f.write("\n".join(lines) + "\n")
+        f.write("\n".join(export_lines) + "\n")
 
     ret = subprocess.run(
         [sys.executable, export_py],
@@ -110,9 +114,7 @@ def main():
 
     print(f"Frozen .pb: {os.path.getsize(frozen_pb) / 1024 / 1024:.1f} MB")
 
-    # ─────────────────────────────────────────
     # 2. Frozen .pb -> ONNX
-    # ─────────────────────────────────────────
     print("\n2. Converting frozen .pb -> ONNX...")
 
     raw_onnx = os.path.join(output_dir, "whitebox_raw.onnx")
@@ -151,9 +153,7 @@ def main():
 
     print(f"Raw ONNX: {os.path.getsize(raw_onnx) / 1024 / 1024:.1f} MB")
 
-    # ─────────────────────────────────────────
     # 3. Simplify ONNX
-    # ─────────────────────────────────────────
     print("\n3. Simplifying ONNX...")
 
     import onnx
@@ -174,9 +174,7 @@ def main():
         print("  Simplify failed, using original")
         shutil.copy(raw_onnx, sim_path)
 
-    # ─────────────────────────────────────────
     # 4. ONNX -> NCNN via PNNX
-    # ─────────────────────────────────────────
     print("\n4. Converting ONNX -> NCNN via PNNX...")
 
     pnnx_param = sim_path.replace(".onnx", ".ncnn.param")
@@ -206,9 +204,7 @@ def main():
     print(f"  param: {os.path.getsize(param_path) / 1024:.1f} KB")
     print(f"  bin:   {os.path.getsize(bin_path) / 1024 / 1024:.1f} MB")
 
-    # ─────────────────────────────────────────
     # 5. Fix tensor names
-    # ─────────────────────────────────────────
     print("\n5. Fixing tensor names...")
 
     with open(param_path, "r") as f:
@@ -224,9 +220,7 @@ def main():
     with open(param_path, "w") as f:
         f.write(content)
 
-    # ─────────────────────────────────────────
     # 6. Verify
-    # ─────────────────────────────────────────
     print("\n=== Output ===")
     print(f"  whitebox.param: {os.path.getsize(param_path) / 1024:.1f} KB")
     print(f"  whitebox.bin:   {os.path.getsize(bin_path) / 1024 / 1024:.1f} MB")
