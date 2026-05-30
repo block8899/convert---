@@ -19,19 +19,21 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install onnx onnxsim huggingface_hub pnnx
+          pip install onnx onnxsim pnnx
 
       - name: Download ToonClip ONNX
         run: |
-          python -c "
-          from huggingface_hub import hf_hub_download
-          import shutil
-          # ⚠️ Kiểm tra lại filename trên repo gốc nếu không phải 'model.onnx'
-          path = hf_hub_download(repo_id='JacopoMangiavacchi/ToonClip-ComicsHero', filename='model.onnx')
-          shutil.copy(path, 'ToonClip.onnx')
-          import os
-          print(f'Downloaded: {os.path.getsize(\"ToonClip.onnx\")} bytes')
-          "
+          echo "⬇️ Downloading from HuggingFace..."
+          curl -L -o ToonClip.onnx \
+            "https://huggingface.co/Jacopo/ToonClip/resolve/main/model.onnx"
+          
+          if [ ! -s ToonClip.onnx ]; then
+            echo "❌ Download failed"
+            exit 1
+          fi
+          
+          SIZE=$(du -h ToonClip.onnx | cut -f1)
+          echo "✅ Downloaded: $SIZE"
 
       - name: Convert to NCNN
         run: python scripts/convert_toonclip.py
@@ -40,8 +42,10 @@ jobs:
         run: |
           echo "=== Output files ==="
           ls -lh output/
+          echo ""
           echo "=== Param header ==="
           head -5 output/toonclip.param
+          echo "..."
           echo "=== Param tail ==="
           tail -3 output/toonclip.param
 
