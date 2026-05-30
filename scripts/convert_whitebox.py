@@ -1,6 +1,17 @@
-"""White-Box Cartoonization: TF1 → Frozen PB → ONNX → NCNN"""
+"""White-Box Cartoonization: TF1 → Frozen PB → ONNX → NCNN (Debug)"""
 import os, sys, subprocess, shutil, onnx
 from onnxsim import simplify
+
+def run_with_log(cmd, timeout, desc):
+    """Run command and print stderr on failure"""
+    print(f"→ {desc}")
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if res.returncode != 0:
+        print(f"❌ {desc} failed:")
+        if res.stdout: print(f"  stdout: {res.stdout[-500:]}")
+        if res.stderr: print(f"  stderr: {res.stderr[-800:]}")
+        return False
+    return True
 
 def main():
     repo_dir = "repo_wbc"
@@ -21,39 +32,65 @@ def main():
 import os, sys, tensorflow as tf
 tf1 = tf.compat.v1
 tf1.disable_eager_execution()
+
+# Mock tf.contrib.slim with tf_slim - CRITICAL FIX
 import tf_slim as slim
-contrib_mock = type(sys)("tensorflow.contrib")
-contrib_mock.slim = slim
-sys.modules["tensorflow.contrib"] = contrib_mock
+sys.modules["tensorflow.contrib"] = type(sys)("tensorflow.contrib")
 sys.modules["tensorflow.contrib.slim"] = slim
-for attr in ["variable_scope", "get_variable", "placeholder", "Session", "Saver", "GraphDef"]:
-    setattr(tf, attr, getattr(tf1, attr))
+
+# Re-export TF1 APIs to tf namespace (network.py uses tf.xxx)
+for name in ["variable_scope", "get_variable", "placeholder", "Session", "Saver", "GraphDef", "global_variables_initializer"]:
+    setattr(tf, name, getattr(tf1, name))
 setattr(tf.image, "resize_bilinear", tf1.image.resize_bilinear)
 setattr(tf.image, "resize_nearest_neighbor", tf1.image.resize_nearest_neighbor)
+setattr(tf.nn, "conv2d", tf1.nn.conv2d)
+setattr(tf.nn, "relu", tf1.nn.relu)
+setattr(tf.nn, "batch_normalization", tf1.nn.batch_normalization)
+
 sys.path.insert(0, r"{test_code_dir}")
 import network
+
+print("Building graph...", flush=True)
 input_ph = tf1.placeholder(tf.float32, [1, 512, 512, 3], name="input")
-output = network.unet_generator(input_ph, channel=32, num_blocks=4, name="generator", reuse=False)
+try:
+    output = network.unet_generator(input_ph, channel=32, num_blocks=4, name="generator", reuse=False)
+except Exception as e:
+    print(f"ERROR building graph: {{e}}", flush=True)
+    sys.exit(1)
 output = tf.identity(output, name="output")
+print(f"Output shape: {{output.shape}}", flush=True)
+
+print("Loading checkpoint...", flush=True)
 saver = tf1.train.Saver()
 sess = tf1.Session()
-saver.restore(sess, r"{ckpt_path}")
+try:
+    saver.restore(sess, r"{ckpt_path}")
+    print("Checkpoint loaded OK", flush=True)
+except Exception as e:
+    print(f"ERROR loading checkpoint: {{e}}", flush=True)
+    sess.close()
+    sys.exit(1)
+
+print("Freezing graph...", flush=True)
 graph_def = tf1.graph_util.convert_variables_to_constants(sess, sess.graph_def, ["output"])
 with tf.io.gfile.GFile(r"{frozen_pb}", "wb") as f:
     f.write(graph_def.SerializeToString())
+print(f"Frozen PB saved: {{os.path.getsize(r'{frozen_pb}')/1024/1024:.1f}} MB", flush=True)
+
+# Log IO nodes for debugging
 for node in graph_def.node:
     if node.op == "Placeholder": print(f"INPUT_NODE:{{node.name}}")
     if node.name == "output": print(f"OUTPUT_NODE:{{node.name}}")
 sess.close()
+print("Export DONE", flush=True)
 '''
     with open(export_py, "w") as f:
         f.write(export_code)
     
-    if subprocess.run([sys.executable, export_py], capture_output=True, text=True, timeout=300).returncode != 0:
-        print("ERROR: Export Frozen PB failed")
+    if not run_with_log([sys.executable, export_py], 300, "Export Frozen PB"):
         sys.exit(1)
-    if not os.path.exists(frozen_pb):
-        print("ERROR: Frozen PB not created")
+    if not os.path.exists(frozen_pb) or os.path.getsize(frozen_pb) < 10*1024*1024:
+        print("ERROR: Frozen PB invalid or too small")
         sys.exit(1)
 
     # 2. Frozen PB → ONNX
@@ -61,9 +98,10 @@ sess.close()
     success = False
     for out_name in ["output:0", "generator/output:0", "output_1:0"]:
         cmd = [sys.executable, "-m", "tf2onnx.convert", "--graphdef", frozen_pb, "--output", raw_onnx, "--opset", "11", "--inputs", "input:0", "--outputs", out_name]
-        if subprocess.run(cmd, capture_output=True, text=True, timeout=300).returncode == 0 and os.path.getsize(raw_onnx) > 10*1024*1024:
-            success = True
-            break
+        if run_with_log(cmd, 300, f"tf2onnx ({out_name})"):
+            if os.path.getsize(raw_onnx) > 10*1024*1024:
+                success = True
+                break
     if not success:
         print("ERROR: ONNX conversion failed")
         sys.exit(1)
@@ -76,13 +114,13 @@ sess.close()
     try:
         model_simp, check = simplify(model)
         onnx.save(model_simp if check else model, sim_path)
-    except:
+    except Exception as e:
+        print(f"WARN: Simplify failed: {e}, using original")
         shutil.copy(raw_onnx, sim_path)
 
     # 4. ONNX → NCNN via PNNX
     pnnx_cmd = ["pnnx", sim_path, "inputshape=[1,512,512,3]", "device=cpu", "fp16=0", "optlevel=2"]
-    if subprocess.run(pnnx_cmd, capture_output=True, text=True, timeout=600).returncode != 0:
-        print("ERROR: PNNX conversion failed")
+    if not run_with_log(pnnx_cmd, 600, "PNNX conversion"):
         sys.exit(1)
     
     pnnx_param = sim_path.replace(".onnx", ".ncnn.param")
@@ -136,7 +174,6 @@ sess.close()
         print(f"NCNN Output Blob: '{ncnn_out}'")
         print(f"Update C++: ex.input(\"{ncnn_in}\", in) / ex.extract(\"{ncnn_out}\", out)")
 
-    # 7. Summary
     print(f"Output: whitebox.param ({os.path.getsize(param_path)/1024:.1f} KB), whitebox.bin ({os.path.getsize(bin_path)/1024/1024:.1f} MB)")
     print("Conversion completed.")
 
