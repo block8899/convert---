@@ -1,6 +1,5 @@
 """White-Box Cartoonization: TF1 -> Frozen PB -> ONNX -> NCNN (Fixed)"""
 import os, sys, subprocess, shutil, onnx
-from onnxsim import simplify
 
 def run_cmd(cmd, timeout, desc):
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -79,12 +78,16 @@ sess.close()
             success = True; break
     if not success: print("❌ ONNX conversion failed"); sys.exit(1)
 
-    # 3. Skip ONNX Simplify (PNNX sẽ tự optimize an toàn hơn)
+    # 3. Skip onnxsim (giữ nguyên graph UNet) + Lấy tên blob
     sim_path = os.path.join(output_dir, "whitebox_sim.onnx")
     shutil.copy(raw_onnx, sim_path)
-    print(f"✅ Skipped onnxsim. Using raw ONNX for PNNX.")
+    print("✅ Skipped onnxsim to preserve UNet structure.")
+    
+    model = onnx.load(raw_onnx)
+    onnx_in = model.graph.input[0].name
+    onnx_out = model.graph.output[0].name
 
-    # 4. ONNX -> NCNN (✅ FIX CHÍNH: inputshape + device + fp16)
+    # 4. ONNX -> NCNN
     pnnx_cmd = ["pnnx", sim_path, "inputshape=[1,512,512,3]", "device=cpu", "fp16=0", "optlevel=2"]
     if not run_cmd(pnnx_cmd, 600, "PNNX"): sys.exit(1)
 
@@ -93,7 +96,7 @@ sess.close()
     if not os.path.exists(pnnx_param) or os.path.getsize(pnnx_bin) < 1_000_000:
         print("❌ PNNX output invalid"); sys.exit(1)
 
-    # 5. Safe Blob Rename & Copy
+    # 5. Safe Rename & Copy
     param_path = os.path.join(output_dir, "whitebox.param")
     bin_path = os.path.join(output_dir, "whitebox.bin")
     shutil.copy(pnnx_param, param_path); shutil.copy(pnnx_bin, bin_path)
@@ -107,9 +110,8 @@ sess.close()
         if l.startswith("Input"): ncnn_in = l.split()[-1]
         ncnn_out = l.split()[-1]
     if ncnn_in and ncnn_out:
-        print(f"\n🔑 NCNN Input Blob: '{ncnn_in}'")
-        print(f"🔑 NCNN Output Blob: '{ncnn_out}'")
-        print(f"   C++ Code: ex.input(\"{ncnn_in}\", in) / ex.extract(\"{ncnn_out}\", out)")
+        print(f"\n🔑 NCNN Input: '{ncnn_in}' | Output: '{ncnn_out}'")
+        print(f"   C++: ex.input(\"{ncnn_in}\", in) / ex.extract(\"{ncnn_out}\", out)")
     print(f"\n✅ Done: param ({os.path.getsize(param_path)/1024:.1f}KB) | bin ({os.path.getsize(bin_path)/1024/1024:.1f}MB)")
 
 if __name__ == "__main__":
