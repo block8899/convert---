@@ -19,11 +19,24 @@ jobs:
           gdown "${FILE_ID}" -O wbc_models.zip || gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O wbc_models.zip
           mkdir -p repo_wbc/test_code/saved_models
           unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
-      - name: Download Verified ONNX & Convert to NCNN
+      - name: Download ONNX & Convert to NCNN
         run: |
-          # ONNX đã kiểm tra, đủ 150+ layer, ~30MB
-          curl -L -o whitebox.onnx "https://huggingface.co/nnuuyoo/WhiteBox-Cartoonization/resolve/main/whitebox_cartoon.onnx"
+          python3 -c "
+          import urllib.request, os, sys
+          urls = [
+              'https://huggingface.co/PINTO0309/124_White-Box-Cartoonization/resolve/main/whitebox_cartoon.onnx',
+              'https://huggingface.co/404-User-Not-Found/white-box-cartoonization/resolve/main/model.onnx'
+          ]
+          for u in urls:
+          try:
+            urllib.request.urlretrieve(u, 'whitebox.onnx')
+          if os.path.getsize('whitebox.onnx') > 20_000_000:
+            print(f'✅ Valid ONNX: {os.path.getsize(\"whitebox.onnx\")/1e6:.1f}MB'); sys.exit(0)
+          except: pass
+          print('❌ No valid ONNX found'); sys.exit(1)
+          "
           pnnx whitebox.onnx inputshape=[1,512,512,3] device=cpu fp16=0 optlevel=2
+          mkdir -p output
           mv whitebox.ncnn.param output/whitebox.param
           mv whitebox.ncnn.bin output/whitebox.bin
       - uses: actions/upload-artifact@v4
