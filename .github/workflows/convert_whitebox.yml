@@ -34,4 +34,35 @@ import requests, re, os
 fid='${FILE_ID}'; fname='${FILE_NAME}'
 s = requests.Session()
 r = s.get(f'https://drive.google.com/uc?export=download&id={fid}', allow_redirects=True)
-if 'confirm=' in r.text
+if 'confirm=' in r.text:
+    t = re.search(r'confirm=([a-zA-Z0-9_-]+)', r.text)
+    if t: r = s.get(f'https://drive.google.com/uc?export=download&confirm={t.group(1)}&id={fid}', stream=True)
+with open(fname, 'wb') as f:
+    for c in r.iter_content(8192):
+        if c: f.write(c)
+print(f'Downloaded: {fname}')
+"
+          fi
+          
+          # Validate
+          if [ ! -f "${FILE_NAME}" ] || file "${FILE_NAME}" | grep -q "HTML"; then
+            echo "❌ Download failed. Check Drive permissions (must be 'Anyone with link')."; exit 1
+          fi
+          SIZE=$(du -m "${FILE_NAME}" | cut -f1)
+          if [ "$SIZE" -lt 10 ]; then
+            echo "❌ File too small (${SIZE}MB). Expected >10MB."; exit 1
+          fi
+          echo "✅ Checkpoint valid: ${SIZE}MB"
+          
+          mkdir -p repo_wbc/test_code/saved_models
+          unzip -o "${FILE_NAME}" -d repo_wbc/test_code/saved_models/ || true
+
+      - name: Convert to NCNN
+        run: python scripts/convert_whitebox.py
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: whitebox-ncnn
+          path: output/
+          retention-days: 30
