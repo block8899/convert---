@@ -18,42 +18,47 @@ jobs:
       - name: Install deps
         run: pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx tf-slim gdown requests
 
-      - name: Download Weights (Auto Bypass GDrive)
+      - name: Download Weights (Your Drive)
         run: |
-          FILE_ID="1j0jDENjdwxCDb36meP6-u5xDBzmKBOjJ"
+          FILE_ID="1yXSY8PZf6u42tXMsHLXow-9MLhaX-H3q"
           FILE_NAME="wbc_models.zip"
           
-          # Cách 1: gdown v4.7+ hỗ trợ fuzzy, tự xử lý xác nhận
+          # Try gdown first (v4.7+ supports fuzzy matching)
           gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O ${FILE_NAME} 2>/dev/null || true
           
-          # Cách 2: Nếu gdown fail, dùng requests bypass trực tiếp
-          if [ ! -f ${FILE_NAME} ] || file ${FILE_NAME} | grep -q "HTML"; then
+          # Fallback: direct bypass with confirm token parsing
+          if [ ! -f ${FILE_NAME} ] || [ $(stat -c%s ${FILE_NAME} 2>/dev/null || echo 0) -lt 1000000 ] || file ${FILE_NAME} | grep -q "HTML"; then
             echo "⚠️ gdown blocked, trying direct bypass..."
-            python -c "
-            import requests, os
-            url = 'https://drive.google.com/uc?export=download&id=${FILE_ID}'
-            s = requests.Session()
-            r = s.get(url, allow_redirects=True)
-            # Parse confirm token nếu có
-            if 'confirm' in r.text:
-                import re
-                token = re.search('confirm=([a-zA-Z0-9]+)', r.text).group(1)
-                url = f'https://drive.google.com/uc?export=download&confirm={token}&id=${FILE_ID}'
-                r = s.get(url, stream=True)
-            with open('${FILE_NAME}', 'wb') as f:
-                for chunk in r.iter_content(8192): f.write(chunk)
-            "
+            python3 << 'PYEOF'
+            import requests, re, sys
+            FILE_ID = "1yXSY8PZf6u42tXMsHLXow-9MLhaX-H3q"
+            FILE_NAME = "wbc_models.zip"
+            session = requests.Session()
+            url = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
+            r = session.get(url, allow_redirects=True)
+            # Parse confirm token if Google shows warning page
+            if 'confirm=' in r.text:
+                token = re.search('confirm=([a-zA-Z0-9_-]+)', r.text)
+                if token:
+                    url = f"https://drive.google.com/uc?export=download&confirm={token.group(1)}&id={FILE_ID}"
+                    r = session.get(url, stream=True)
+            with open(FILE_NAME, 'wb') as f:
+                for chunk in r.iter_content(8192):
+                    if chunk: f.write(chunk)
+            print(f"Downloaded: {FILE_NAME}")
+            PYEOF
           fi
           
           # Validate
           if [ ! -f ${FILE_NAME} ] || file ${FILE_NAME} | grep -q "HTML"; then
-            echo "❌ Cannot download weights. Google Drive blocked CI."; exit 1
+            echo "❌ Download failed. Check Drive link permissions (must be 'Anyone with link')."; exit 1
           fi
           SIZE=$(du -m ${FILE_NAME} | cut -f1)
           if [ "$SIZE" -lt 10 ]; then
             echo "❌ File too small (${SIZE}MB). Expected >10MB."; exit 1
           fi
-          echo "✅ Downloaded: ${SIZE}MB"
+          echo "✅ Checkpoint valid: ${SIZE}MB"
+          
           mkdir -p repo_wbc/test_code/saved_models
           unzip -o ${FILE_NAME} -d repo_wbc/test_code/saved_models/ || true
 
