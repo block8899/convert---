@@ -2,7 +2,7 @@ name: Convert White-Box Cartoonization to NCNN
 on: [workflow_dispatch]
 jobs:
   convert:
-    runs-on: ubuntu-20.04  # ✅ ubuntu-20.04 ổn định hơn cho TF1 legacy
+    runs-on: ubuntu-22.04  # ✅ ubuntu-22.04 ổn định hơn cho TF1 legacy
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
