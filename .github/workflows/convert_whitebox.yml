@@ -16,45 +16,25 @@ jobs:
         with: { python-version: '3.10' }
 
       - name: Install deps
-        run: |
-          pip install --upgrade pip
-          # ✅ Lock gdown version để tránh breaking change
-          pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx tf-slim "gdown>=4.6,<5.0"
+        run: pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx tf-slim "gdown>=4.6,<5.0"
 
       - name: Clone repo + download weights
         run: |
           git clone --depth 1 https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
-          
-          # ✅ Try gdown với flag fuzzy + cookie để tăng tỉ lệ thành công
           FILE_ID="1j0jDENjdwxCDb36meP6-u5xDBzmKBOjJ"
-          gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O wbc_models.zip --cookie cookies.txt 2>/dev/null || \
-          gdown "${FILE_ID}" -O wbc_models.zip 2>/dev/null || \
-          { echo "⚠️ gdown failed, trying direct curl..."; \
-            curl -L -c cookies.txt -b cookies.txt "https://drive.google.com/uc?export=download&id=${FILE_ID}" -o wbc_models.zip; }
-          
-          # ✅ Validate file tải về
-          if [ ! -f wbc_models.zip ] || file wbc_models.zip | grep -q "HTML"; then
-            echo "❌ Downloaded file is HTML. Check Drive permissions."; exit 1
-          fi
+          gdown "${FILE_ID}" -O wbc_models.zip || gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O wbc_models.zip
+          if [ ! -f wbc_models.zip ] || file wbc_models.zip | grep -q "HTML"; then echo "❌ Download failed"; exit 1; fi
           SIZE=$(du -m wbc_models.zip | cut -f1)
-          if [ "$SIZE" -lt 10 ]; then
-            echo "❌ File too small (${SIZE}MB). Expected >10MB."; exit 1
-          fi
-          echo "✅ Checkpoint valid: ${SIZE}MB"
-          
+          if [ "$SIZE" -lt 10 ]; then echo "❌ File too small"; exit 1; fi
+          echo "✅ Checkpoint: ${SIZE}MB"
           mkdir -p repo_wbc/test_code/saved_models
           unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
-          echo "=== Checkpoint files ==="
-          find repo_wbc/test_code/saved_models -name "model-33999*" -exec ls -lh {} \;
 
       - name: Convert White-Box → NCNN
         run: python scripts/convert_whitebox.py
 
       - name: Verify & Upload
-        run: |
-          ls -lh output/
-          head -3 output/whitebox.param
-          tail -2 output/whitebox.param
+        run: ls -lh output/ && head -3 output/whitebox.param && tail -2 output/whitebox.param
         if: success()
 
       - uses: actions/upload-artifact@v4
