@@ -1,15 +1,14 @@
-"""White-Box Cartoonization: TF1 → Frozen PB → ONNX → NCNN (Debug)"""
+"""White-Box Cartoonization: TF1 → Frozen PB → ONNX → NCNN (Fixed TF1 APIs)"""
 import os, sys, subprocess, shutil, onnx
 from onnxsim import simplify
 
 def run_with_log(cmd, timeout, desc):
-    """Run command and print stderr on failure"""
     print(f"→ {desc}")
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if res.returncode != 0:
         print(f"❌ {desc} failed:")
         if res.stdout: print(f"  stdout: {res.stdout[-500:]}")
-        if res.stderr: print(f"  stderr: {res.stderr[-800:]}")
+        if res.stderr: print(f"  stderr: {res.stderr[-1000:]}")
         return False
     return True
 
@@ -30,22 +29,39 @@ def main():
     
     export_code = f'''
 import os, sys, tensorflow as tf
+
+# Force TF1 behavior
 tf1 = tf.compat.v1
 tf1.disable_eager_execution()
 
-# Mock tf.contrib.slim with tf_slim - CRITICAL FIX
+# Mock tf.contrib.slim with tf_slim (CRITICAL for White-Box Cartoonization)
 import tf_slim as slim
-sys.modules["tensorflow.contrib"] = type(sys)("tensorflow.contrib")
+tf_contrib = type(sys)("tensorflow.contrib")
+tf_contrib.slim = slim
+sys.modules["tensorflow.contrib"] = tf_contrib
 sys.modules["tensorflow.contrib.slim"] = slim
+# Also inject into tf namespace for safety
+if not hasattr(tf, "contrib"):
+    tf.contrib = tf_contrib
 
-# Re-export TF1 APIs to tf namespace (network.py uses tf.xxx)
-for name in ["variable_scope", "get_variable", "placeholder", "Session", "Saver", "GraphDef", "global_variables_initializer"]:
-    setattr(tf, name, getattr(tf1, name))
-setattr(tf.image, "resize_bilinear", tf1.image.resize_bilinear)
-setattr(tf.image, "resize_nearest_neighbor", tf1.image.resize_nearest_neighbor)
-setattr(tf.nn, "conv2d", tf1.nn.conv2d)
-setattr(tf.nn, "relu", tf1.nn.relu)
-setattr(tf.nn, "batch_normalization", tf1.nn.batch_normalization)
+# Re-export ONLY the APIs that network.py actually uses
+# ✅ Use correct TF1 paths (not getattr on tf1)
+tf.variable_scope = tf1.variable_scope
+tf.get_variable = tf1.get_variable
+tf.placeholder = tf1.placeholder
+tf.Session = tf1.Session
+tf.GraphDef = tf1.GraphDef
+tf.global_variables_initializer = tf1.global_variables_initializer
+tf.train.Saver = tf1.train.Saver  # ✅ Fixed: was getattr(tf1, "Saver") → fail
+tf.image.resize_bilinear = tf1.image.resize_bilinear
+tf.image.resize_nearest_neighbor = tf1.image.resize_nearest_neighbor
+tf.nn.conv2d = tf1.nn.conv2d
+tf.nn.relu = tf1.nn.relu
+tf.nn.bias_add = tf1.nn.bias_add
+tf.nn.batch_normalization = tf1.nn.batch_normalization
+tf.nn.max_pool = tf1.nn.max_pool
+tf.nn.conv2d_transpose = tf1.nn.conv2d_transpose
+tf.layers = tf1.layers  # In case network.py uses tf.layers
 
 sys.path.insert(0, r"{test_code_dir}")
 import network
@@ -56,6 +72,7 @@ try:
     output = network.unet_generator(input_ph, channel=32, num_blocks=4, name="generator", reuse=False)
 except Exception as e:
     print(f"ERROR building graph: {{e}}", flush=True)
+    import traceback; traceback.print_exc()
     sys.exit(1)
 output = tf.identity(output, name="output")
 print(f"Output shape: {{output.shape}}", flush=True)
@@ -68,6 +85,7 @@ try:
     print("Checkpoint loaded OK", flush=True)
 except Exception as e:
     print(f"ERROR loading checkpoint: {{e}}", flush=True)
+    import traceback; traceback.print_exc()
     sess.close()
     sys.exit(1)
 
@@ -77,7 +95,7 @@ with tf.io.gfile.GFile(r"{frozen_pb}", "wb") as f:
     f.write(graph_def.SerializeToString())
 print(f"Frozen PB saved: {{os.path.getsize(r'{frozen_pb}')/1024/1024:.1f}} MB", flush=True)
 
-# Log IO nodes for debugging
+# Log IO nodes
 for node in graph_def.node:
     if node.op == "Placeholder": print(f"INPUT_NODE:{{node.name}}")
     if node.name == "output": print(f"OUTPUT_NODE:{{node.name}}")
