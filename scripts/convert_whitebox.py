@@ -19,7 +19,7 @@ def main():
     # 1. Validate Checkpoint
     data_file = ckpt_path + ".data-00000-of-00001"
     if not os.path.exists(data_file) or os.path.getsize(data_file) < 10_000_000:
-        print("❌ Checkpoint missing or too small. Ensure valid .zip was extracted.")
+        print("❌ Checkpoint missing/corrupt. Ensure zip extracted correctly.")
         sys.exit(1)
 
     # 2. Export Frozen PB
@@ -126,7 +126,7 @@ sess.close()
     if ncnn_in and ncnn_out:
         print(f"🔑 NCNN Input: '{ncnn_in}' | Output: '{ncnn_out}'")
         print(f"   C++: ex.input(\"{ncnn_in}\", in) / ex.extract(\"{ncnn_out}\", out)")
-    print(f"✅ Done: whitebox.param ({os.path.getsize(param_path)/1024:.1f}KB) | whitebox.bin ({os.path.getsize(bin_path)/1024/1024:.1f}MB)")
+    print(f"✅ Done: param ({os.path.getsize(param_path)/1024:.1f}KB) | bin ({os.path.getsize(bin_path)/1024/1024:.1f}MB)")
 
 if __name__ == "__main__":
     main()
