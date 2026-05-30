@@ -10,7 +10,7 @@ jobs:
         with: { python-version: '3.7' }  # ✅ TF1.15 yêu cầu <=3.7
       - name: Install deps
         run: |
-          pip install --upgrade pip setuptools wheel
+          pip install --upgrade pip setuptools wheel packaging tensorflow-cpu==1.15.0 onnx onnxsim tf2onnx pnnx tf-slim gdown
           pip install tensorflow==1.15.0 onnx onnxsim tf2onnx pnnx tf-slim gdown
       - name: Clone + Download
         run: |
