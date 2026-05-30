@@ -30,18 +30,18 @@ jobs:
           if [ ! -f "${FILE_NAME}" ] || [ $(stat -c%s "${FILE_NAME}" 2>/dev/null || echo 0) -lt 1000000 ] || file "${FILE_NAME}" | grep -q "HTML"; then
             echo "⚠️ gdown blocked, trying direct bypass..."
             python3 -c "
-import requests, re, os
-fid='${FILE_ID}'; fname='${FILE_NAME}'
-s = requests.Session()
-r = s.get(f'https://drive.google.com/uc?export=download&id={fid}', allow_redirects=True)
-if 'confirm=' in r.text:
-    t = re.search(r'confirm=([a-zA-Z0-9_-]+)', r.text)
-    if t: r = s.get(f'https://drive.google.com/uc?export=download&confirm={t.group(1)}&id={fid}', stream=True)
-with open(fname, 'wb') as f:
-    for c in r.iter_content(8192):
-        if c: f.write(c)
-print(f'Downloaded: {fname}')
-"
+          import requests, re, os
+          fid='${FILE_ID}'; fname='${FILE_NAME}'
+          s = requests.Session()
+          r = s.get(f'https://drive.google.com/uc?export=download&id={fid}', allow_redirects=True)
+          if 'confirm=' in r.text:
+          t = re.search(r'confirm=([a-zA-Z0-9_-]+)', r.text)
+          if t: r = s.get(f'https://drive.google.com/uc?export=download&confirm={t.group(1)}&id={fid}', stream=True)
+          with open(fname, 'wb') as f:
+          for c in r.iter_content(8192):
+          if c: f.write(c)
+          print(f'Downloaded: {fname}')
+          "
           fi
           
           # Validate
