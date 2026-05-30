@@ -13,43 +13,55 @@ jobs:
 
       - name: Setup Python 3.10
         uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+        with: { python-version: '3.10' }
 
-      - name: Install dependencies
-        run: pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx tf-slim requests
+      - name: Install deps
+        run: pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx tf-slim gdown requests
 
-      - name: Download Checkpoint
+      - name: Download Weights (Auto Bypass GDrive)
         run: |
-          # ⚠️ Thay URL bằng link direct từ GitHub Release của bạn
-          # Google Drive không còn hỗ trợ auto-download trên CI
-          URL="https://github.com/YOUR_REPO/releases/download/v1.0/wbc_models.zip"
-          curl -L -o wbc_models.zip "$URL"
+          FILE_ID="1j0jDENjdwxCDb36meP6-u5xDBzmKBOjJ"
+          FILE_NAME="wbc_models.zip"
           
-          # Validate file thực
-          if file wbc_models.zip | grep -q "HTML"; then
-            echo "❌ Downloaded HTML captcha. Check URL or use GitHub Releases."; exit 1
+          # Cách 1: gdown v4.7+ hỗ trợ fuzzy, tự xử lý xác nhận
+          gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O ${FILE_NAME} 2>/dev/null || true
+          
+          # Cách 2: Nếu gdown fail, dùng requests bypass trực tiếp
+          if [ ! -f ${FILE_NAME} ] || file ${FILE_NAME} | grep -q "HTML"; then
+            echo "⚠️ gdown blocked, trying direct bypass..."
+            python -c "
+            import requests, os
+            url = 'https://drive.google.com/uc?export=download&id=${FILE_ID}'
+            s = requests.Session()
+            r = s.get(url, allow_redirects=True)
+            # Parse confirm token nếu có
+            if 'confirm' in r.text:
+                import re
+                token = re.search('confirm=([a-zA-Z0-9]+)', r.text).group(1)
+                url = f'https://drive.google.com/uc?export=download&confirm={token}&id=${FILE_ID}'
+                r = s.get(url, stream=True)
+            with open('${FILE_NAME}', 'wb') as f:
+                for chunk in r.iter_content(8192): f.write(chunk)
+            "
           fi
-          SIZE=$(du -m wbc_models.zip | cut -f1)
+          
+          # Validate
+          if [ ! -f ${FILE_NAME} ] || file ${FILE_NAME} | grep -q "HTML"; then
+            echo "❌ Cannot download weights. Google Drive blocked CI."; exit 1
+          fi
+          SIZE=$(du -m ${FILE_NAME} | cut -f1)
           if [ "$SIZE" -lt 10 ]; then
-            echo "❌ Model too small (${SIZE}MB). Expected >10MB."; exit 1
+            echo "❌ File too small (${SIZE}MB). Expected >10MB."; exit 1
           fi
-          echo "✅ Checkpoint valid: ${SIZE}MB"
-          
+          echo "✅ Downloaded: ${SIZE}MB"
           mkdir -p repo_wbc/test_code/saved_models
-          unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
+          unzip -o ${FILE_NAME} -d repo_wbc/test_code/saved_models/ || true
 
       - name: Convert to NCNN
         run: python scripts/convert_whitebox.py
 
-      - name: Verify & Upload
-        run: |
-          ls -lh output/
-          head -3 output/whitebox.param
-          tail -2 output/whitebox.param
-        if: success()
-
       - uses: actions/upload-artifact@v4
+        if: success()
         with:
           name: whitebox-ncnn
           path: output/
