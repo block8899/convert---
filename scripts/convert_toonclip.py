@@ -1,6 +1,6 @@
 """
 ToonClip ONNX → NCNN (via PNNX) - Fixed inputshape mismatch
-✅ Now uses [1,3,512,512] to balance compatibility & model size
+✅ Now uses [1,3,1024,1024] to balance compatibility & model size
 """
 import os, sys, subprocess, shutil, onnx
 
@@ -37,11 +37,9 @@ def main():
     # 3. Convert via PNNX - ✅ FIXED INPUTSHAPE
     log("3. Converting via PNNX...")
     
-    # ✅ OPTION A: Dùng shape gốc (an toàn nhất)
+    # ✅ Dùng shape gốc (an toàn nhất)
     # input_shape = "[1,3,1024,1024]"
-    
-    # ✅ OPTION B: Dùng 512x512 (nhẹ hơn, vẫn tương thích UNet++)
-    input_shape = "[1,3,512,512]"
+    input_shape = "[1,3,1024,1024]"
     
     pnnx_cmd = [
         "pnnx", sim_file,
