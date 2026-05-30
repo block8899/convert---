@@ -30,8 +30,10 @@ jobs:
           pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx gdown tf-slim
 
       - name: Verify PNNX
-        run: which pnnx && pnnx --version
-
+        run: |
+          which pnnx
+          pnnx 2>&1 | head -1  # Chỉ in dòng đầu usage, đủ để confirm binary hoạt động
+          
       - name: Clone repo + download weights
         run: |
           git clone --depth 1 https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
