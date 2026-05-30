@@ -1,4 +1,3 @@
-# .github/workflows/convert_whitebox.yml
 name: Convert White-Box Cartoonization to NCNN
 
 on:
@@ -7,6 +6,7 @@ on:
 jobs:
   convert:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45  # ✅ Giảm từ 60 → 45, fail fast nếu quá lâu
 
     steps:
       - uses: actions/checkout@v4
@@ -16,41 +16,42 @@ jobs:
         with:
           python-version: '3.10'
 
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install deps
         run: |
           pip install --upgrade pip
-          pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx gdown
-          pip install tf-slim
+          pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx gdown tf-slim
 
       - name: Verify PNNX
-        run: which pnnx
+        run: which pnnx && pnnx --version
 
       - name: Clone repo + download weights
         run: |
-          git clone https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
+          git clone --depth 1 https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
           gdown "1j0jDENjdwxCDb36meP6-u5xDBzmKBOjJ" -O wbc_models.zip
-          ls -lh wbc_models.zip
           mkdir -p repo_wbc/test_code/saved_models
           unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
           echo "=== Checkpoint files ==="
-          find repo_wbc/test_code/saved_models -type f -exec ls -lh {} \;
+          find repo_wbc/test_code/saved_models -name "*.index" -exec ls -lh {} \;
 
-      - name: Convert White-Box → NCNN
-        timeout-minutes: 60
+      - name: Convert to NCNN
         run: python scripts/convert_whitebox.py
 
-      - name: Verify
+      - name: Verify Output
         run: |
           echo "=== Output files ==="
           ls -lh output/
-          echo ""
-          for f in output/*.param; do
-            echo "=== $(basename $f) ==="
-            head -3 "$f"
-            echo "..."
-            tail -2 "$f"
-            echo ""
-          done
+          echo "=== Param header ==="
+          head -5 output/whitebox.param
+          echo "=== Param tail ==="
+          tail -3 output/whitebox.param
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -58,14 +59,3 @@ jobs:
           name: whitebox-ncnn
           path: output/
           retention-days: 30
-
-      - name: Summary
-        run: |
-          echo "## White-Box Cartoonization NCNN" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| File | Size |" >> $GITHUB_STEP_SUMMARY
-          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          for f in output/*; do
-            SIZE=$(du -h "$f" | cut -f1)
-            echo "| \`$(basename $f)\` | $SIZE |" >> $GITHUB_STEP_SUMMARY
-          done
