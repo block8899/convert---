@@ -1,17 +1,25 @@
 name: Convert White-Box Cartoonization to NCNN
-on: [workflow_dispatch]
+
+on:
+  workflow_dispatch:
+
 jobs:
   convert:
-    runs-on: ubuntu-22.04  # ✅ ubuntu-22.04 ổn định hơn cho TF1 legacy
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: { python-version: '3.7' }  # ✅ TF1.15 yêu cầu <=3.7
+        with:
+          python-version: '3.7'
+
       - name: Install deps
         run: |
-          pip install --upgrade pip setuptools wheel packaging tensorflow-cpu==1.15.0 onnx onnxsim tf2onnx pnnx tf-slim gdown
+          pip install --upgrade pip setuptools wheel packaging
           pip install tensorflow==1.15.0 onnx onnxsim tf2onnx pnnx tf-slim gdown
+
       - name: Clone + Download
         run: |
           git clone --depth 1 https://github.com/SystemErrorWang/White-box-Cartoonization.git repo_wbc
@@ -19,26 +27,28 @@ jobs:
           gdown "${FILE_ID}" -O wbc_models.zip || gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O wbc_models.zip
           mkdir -p repo_wbc/test_code/saved_models
           unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
+
       - name: Download ONNX & Convert to NCNN
         run: |
-          python3 -c "
-          import urllib.request, os, sys
-          urls = [
-              'https://huggingface.co/PINTO0309/124_White-Box-Cartoonization/resolve/main/whitebox_cartoon.onnx',
-              'https://huggingface.co/404-User-Not-Found/white-box-cartoonization/resolve/main/model.onnx'
-          ]
-          for u in urls:
-          try:
-            urllib.request.urlretrieve(u, 'whitebox.onnx')
-          if os.path.getsize('whitebox.onnx') > 20_000_000:
-            print(f'✅ Valid ONNX: {os.path.getsize(\"whitebox.onnx\")/1e6:.1f}MB'); sys.exit(0)
-          except: pass
-          print('❌ No valid ONNX found'); sys.exit(1)
-          "
+          curl -L -o whitebox.onnx "https://huggingface.co/PINTO0309/124_White-Box-Cartoonization/resolve/main/model.onnx"
+          SIZE=$(stat -c%s whitebox.onnx 2>/dev/null || echo 0)
+          
+          if [ "$SIZE" -lt 20000000 ]; then
+            echo "⚠️ File <20MB, trying fallback..."
+            curl -L -o whitebox.onnx "https://huggingface.co/nnuuyoo/WhiteBox-Cartoonization/resolve/main/whitebox_cartoon.onnx"
+            SIZE=$(stat -c%s whitebox.onnx 2>/dev/null || echo 0)
+            [ "$SIZE" -lt 20000000 ] && { echo "❌ Download failed"; exit 1; }
+          fi
+          echo "✅ Valid ONNX: $((SIZE/1024/1024))MB"
+          
           pnnx whitebox.onnx inputshape=[1,512,512,3] device=cpu fp16=0 optlevel=2
           mkdir -p output
           mv whitebox.ncnn.param output/whitebox.param
           mv whitebox.ncnn.bin output/whitebox.bin
+
       - uses: actions/upload-artifact@v4
         if: success()
-        with: { name: whitebox-ncnn, path: output/, retention-days: 30 }
+        with:
+          name: whitebox-ncnn
+          path: output/
+          retention-days: 30
