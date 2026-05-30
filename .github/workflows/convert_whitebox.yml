@@ -23,51 +23,15 @@ jobs:
           FILE_ID="1yXSY8PZf6u42tXMsHLXow-9MLhaX-H3q"
           FILE_NAME="wbc_models.zip"
           
-          # Try gdown first (v4.7+ supports fuzzy matching)
+          # Try gdown first
           gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O ${FILE_NAME} 2>/dev/null || true
           
-          # Fallback: direct bypass with confirm token parsing
-          if [ ! -f ${FILE_NAME} ] || [ $(stat -c%s ${FILE_NAME} 2>/dev/null || echo 0) -lt 1000000 ] || file ${FILE_NAME} | grep -q "HTML"; then
+          # Fallback: Python inline bypass (no heredoc)
+          if [ ! -f "${FILE_NAME}" ] || [ $(stat -c%s "${FILE_NAME}" 2>/dev/null || echo 0) -lt 1000000 ] || file "${FILE_NAME}" | grep -q "HTML"; then
             echo "⚠️ gdown blocked, trying direct bypass..."
-            python3 << 'PYEOF'
-            import requests, re, sys
-            FILE_ID = "1yXSY8PZf6u42tXMsHLXow-9MLhaX-H3q"
-            FILE_NAME = "wbc_models.zip"
-            session = requests.Session()
-            url = f"https://drive.google.com/uc?export=download&id={FILE_ID}"
-            r = session.get(url, allow_redirects=True)
-            # Parse confirm token if Google shows warning page
-            if 'confirm=' in r.text:
-                token = re.search('confirm=([a-zA-Z0-9_-]+)', r.text)
-                if token:
-                    url = f"https://drive.google.com/uc?export=download&confirm={token.group(1)}&id={FILE_ID}"
-                    r = session.get(url, stream=True)
-            with open(FILE_NAME, 'wb') as f:
-                for chunk in r.iter_content(8192):
-                    if chunk: f.write(chunk)
-            print(f"Downloaded: {FILE_NAME}")
-            PYEOF
-          fi
-          
-          # Validate
-          if [ ! -f ${FILE_NAME} ] || file ${FILE_NAME} | grep -q "HTML"; then
-            echo "❌ Download failed. Check Drive link permissions (must be 'Anyone with link')."; exit 1
-          fi
-          SIZE=$(du -m ${FILE_NAME} | cut -f1)
-          if [ "$SIZE" -lt 10 ]; then
-            echo "❌ File too small (${SIZE}MB). Expected >10MB."; exit 1
-          fi
-          echo "✅ Checkpoint valid: ${SIZE}MB"
-          
-          mkdir -p repo_wbc/test_code/saved_models
-          unzip -o ${FILE_NAME} -d repo_wbc/test_code/saved_models/ || true
-
-      - name: Convert to NCNN
-        run: python scripts/convert_whitebox.py
-
-      - uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: whitebox-ncnn
-          path: output/
-          retention-days: 30
+            python3 -c "
+import requests, re, os
+fid='${FILE_ID}'; fname='${FILE_NAME}'
+s = requests.Session()
+r = s.get(f'https://drive.google.com/uc?export=download&id={fid}', allow_redirects=True)
+if 'confirm=' in r.text
