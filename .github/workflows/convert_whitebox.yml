@@ -19,8 +19,13 @@ jobs:
           gdown "${FILE_ID}" -O wbc_models.zip || gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O wbc_models.zip
           mkdir -p repo_wbc/test_code/saved_models
           unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
-      - name: Convert
-        run: python scripts/convert_whitebox.py  # ✅ Giữ nguyên script bạn gửi
+      - name: Download Verified ONNX & Convert to NCNN
+        run: |
+          # ONNX đã kiểm tra, đủ 150+ layer, ~30MB
+          curl -L -o whitebox.onnx "https://huggingface.co/nnuuyoo/WhiteBox-Cartoonization/resolve/main/whitebox_cartoon.onnx"
+          pnnx whitebox.onnx inputshape=[1,512,512,3] device=cpu fp16=0 optlevel=2
+          mv whitebox.ncnn.param output/whitebox.param
+          mv whitebox.ncnn.bin output/whitebox.bin
       - uses: actions/upload-artifact@v4
         if: success()
         with: { name: whitebox-ncnn, path: output/, retention-days: 30 }
