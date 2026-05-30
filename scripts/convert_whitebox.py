@@ -79,15 +79,10 @@ sess.close()
             success = True; break
     if not success: print("❌ ONNX conversion failed"); sys.exit(1)
 
-    # 3. Simplify ONNX
-    model = onnx.load(raw_onnx)
-    onnx_in, onnx_out = model.graph.input[0].name, model.graph.output[0].name
+    # 3. Skip ONNX Simplify (PNNX sẽ tự optimize an toàn hơn)
     sim_path = os.path.join(output_dir, "whitebox_sim.onnx")
-    try:
-        m_simp, ok = simplify(model)
-        onnx.save(m_simp if ok else model, sim_path)
-    except Exception as e:
-        print(f"⚠️ Simplify skipped: {e}"); shutil.copy(raw_onnx, sim_path)
+    shutil.copy(raw_onnx, sim_path)
+    print(f"✅ Skipped onnxsim. Using raw ONNX for PNNX.")
 
     # 4. ONNX -> NCNN (✅ FIX CHÍNH: inputshape + device + fp16)
     pnnx_cmd = ["pnnx", sim_path, "inputshape=[1,512,512,3]", "device=cpu", "fp16=0", "optlevel=2"]
