@@ -18,44 +18,18 @@ jobs:
       - name: Install deps
         run: pip install tensorflow==2.13.0 onnx onnxsim tf2onnx pnnx tf-slim gdown requests
 
-      - name: Download Weights (Your Drive)
+      - name: Download Weights
+        env:
+          GDRIVE_FILE_ID: "1yXSY8PZf6u42tXMsHLXow-9MLhaX-H3q"
+          GDRIVE_OUTPUT: "wbc_models.zip"
+        run: python scripts/download_weights.py
+
+      - name: Extract Checkpoint
         run: |
-          FILE_ID="1yXSY8PZf6u42tXMsHLXow-9MLhaX-H3q"
-          FILE_NAME="wbc_models.zip"
-          
-          # Try gdown first
-          gdown --fuzzy "https://drive.google.com/file/d/${FILE_ID}/view?usp=sharing" -O ${FILE_NAME} 2>/dev/null || true
-          
-          # Fallback: Python inline bypass (no heredoc)
-          if [ ! -f "${FILE_NAME}" ] || [ $(stat -c%s "${FILE_NAME}" 2>/dev/null || echo 0) -lt 1000000 ] || file "${FILE_NAME}" | grep -q "HTML"; then
-            echo "⚠️ gdown blocked, trying direct bypass..."
-            python3 -c "
-          import requests, re, os
-          fid='${FILE_ID}'; fname='${FILE_NAME}'
-          s = requests.Session()
-          r = s.get(f'https://drive.google.com/uc?export=download&id={fid}', allow_redirects=True)
-          if 'confirm=' in r.text:
-          t = re.search(r'confirm=([a-zA-Z0-9_-]+)', r.text)
-          if t: r = s.get(f'https://drive.google.com/uc?export=download&confirm={t.group(1)}&id={fid}', stream=True)
-          with open(fname, 'wb') as f:
-          for c in r.iter_content(8192):
-          if c: f.write(c)
-          print(f'Downloaded: {fname}')
-          "
-          fi
-          
-          # Validate
-          if [ ! -f "${FILE_NAME}" ] || file "${FILE_NAME}" | grep -q "HTML"; then
-            echo "❌ Download failed. Check Drive permissions (must be 'Anyone with link')."; exit 1
-          fi
-          SIZE=$(du -m "${FILE_NAME}" | cut -f1)
-          if [ "$SIZE" -lt 10 ]; then
-            echo "❌ File too small (${SIZE}MB). Expected >10MB."; exit 1
-          fi
-          echo "✅ Checkpoint valid: ${SIZE}MB"
-          
           mkdir -p repo_wbc/test_code/saved_models
-          unzip -o "${FILE_NAME}" -d repo_wbc/test_code/saved_models/ || true
+          unzip -o wbc_models.zip -d repo_wbc/test_code/saved_models/ || true
+          echo "=== Extracted files ==="
+          find repo_wbc/test_code/saved_models -name "model-33999*" -exec ls -lh {} \;
 
       - name: Convert to NCNN
         run: python scripts/convert_whitebox.py
